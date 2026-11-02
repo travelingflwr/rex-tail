@@ -37,3 +37,7 @@ On first launch, allow **Rex's Tail** in System Settings → Privacy & Security 
 
 - **⌃⌥⌘W** shows or hides the panel.
 - The menu bar icon has the same toggle, plus Quit.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
