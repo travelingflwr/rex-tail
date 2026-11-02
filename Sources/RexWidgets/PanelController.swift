@@ -75,8 +75,12 @@ final class PanelController {
     func update() {
         guard AXIsProcessTrusted() else { return hide("Waiting for Accessibility access") }
         guard wantsVisible else { return hide("Hidden — ⌃⌥⌘W to show") }
-        guard tracker.isRunning, !tracker.isHidden, var state = tracker.windowState(), !state.isMinimized,
-              tracker.isOnScreenInCurrentSpace() else { return enterDrawer() }
+        // Dock beside Rex only while Rex is the app in front (or we are, e.g. showing an
+        // upgrade prompt). Otherwise Rex is behind other apps and the panel would be
+        // too, so it becomes the edge drawer instead.
+        let rexInFront = tracker.isActive || NSApp.isActive
+        guard rexInFront, tracker.isRunning, !tracker.isHidden, var state = tracker.windowState(),
+              !state.isMinimized, tracker.isOnScreenInCurrentSpace() else { return enterDrawer() }
         lastScreen = screen(for: state.frame)
         leaveDrawer()
 
@@ -136,7 +140,8 @@ final class PanelController {
         if !handle.isVisible { handle.orderFrontRegardless() }
         if drawerOpen, !animating, panel.frame != openFrame(v) { panel.setFrame(openFrame(v), display: true) }
         lastActive = false
-        setStatus(tracker.isRunning ? "Drawer — Rex is out of sight" : "Drawer — Rex isn't running")
+        setStatus(!tracker.isRunning ? "Drawer — Rex isn't running"
+                  : tracker.isActive ? "Drawer — Rex is out of sight" : "Drawer — Rex is in the background")
     }
 
     /// Back to docking beside Rex.
