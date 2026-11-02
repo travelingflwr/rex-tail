@@ -30,6 +30,10 @@ struct HostVersionInfo: Identifiable, Equatable {
     var restartBlocked: String?      // why Restart is unavailable, when it is
     var hasRexurrect = false
     var status: Status = .checking
+    // This Mac only: the Rex app and its bundled server are versioned separately.
+    var appVersion: String?          // "0.1.0 (1754)"
+    var serverBuild: String?         // Rex Server.app build, when it's the one running
+    var serverPending = false        // a newer server is installed but not running yet
 
     var name: String { label ?? "This Mac" }
 }
@@ -60,6 +64,14 @@ final class HostsModel: ObservableObject {
 
     func start() {
         refresh(full: true)
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            guard app?.bundleIdentifier == RexTracker.bundleID else { return }
+            // Give the relaunched server a moment to come up before asking it.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) { self?.refresh(full: false) }
+        }
         // Running versions are cheap to ask for; new builds are checked every few hours.
         versionTimer = Timer.scheduledTimer(withTimeInterval: 10 * 60, repeats: true) { [weak self] _ in
             self?.refresh(full: false)
@@ -133,14 +145,33 @@ final class HostsModel: ObservableObject {
         let server = RexCLI.json(["api", "call", "server.version"])
         row.platform = (server?["platform"] as? String).map(Self.prettyPlatform)
         guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: RexTracker.bundleID),
-              let bundle = Bundle(url: appURL) else {
+              let info = Self.infoPlist(appURL) else {
             row.status = .unknown("Rex app not found")
             return row
         }
-        let short = bundle.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
-        let build = bundle.infoDictionary?["CFBundleVersion"] as? String ?? "?"
-        row.running = "\(short) (\(build))"
+        let short = info["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info["CFBundleVersion"] as? String ?? "?"
+        row.appVersion = "\(short) (\(build))"
+
+        // The server: what's running versus the copy Rex has installed.
+        let runningServer = server?["rex_version"] as? String
+        row.running = runningServer
         row.runningDate = (server?["built_at"] as? String).flatMap(ISO8601.parse)
+        if let path = RexCLI.path, path.contains("/Rex Server.app/") {
+            let serverApp = URL(fileURLWithPath: path).deletingLastPathComponent()  // MacOS
+                .deletingLastPathComponent().deletingLastPathComponent()           // Rex Server.app
+            let installed = Shell.run(path, ["version"]).flatMap {
+                String(decoding: $0, as: UTF8.self).split(separator: "\n").first
+                    .map { $0.replacingOccurrences(of: "rex ", with: "") }
+            }
+            row.installed = installed
+            if let installed, let runningServer, installed != runningServer {
+                row.serverPending = true
+            } else {
+                row.serverBuild = Self.infoPlist(serverApp)?["CFBundleVersion"] as? String
+            }
+        }
+
         if let latest = latestMacBuild {
             row.latest = latest
             row.status = Versions.compare(build, latest) == .orderedAscending ? .macUpdateAvailable(latest) : .upToDate
@@ -148,6 +179,12 @@ final class HostsModel: ObservableObject {
             row.status = .unknown("Couldn't check for updates")
         }
         return row
+    }
+
+    /// Reads an app's Info.plist from disk. `Bundle` caches it for the life of the
+    /// process, which would keep showing the old build after Rex updates itself.
+    static func infoPlist(_ appURL: URL) -> [String: Any]? {
+        NSDictionary(contentsOf: appURL.appendingPathComponent("Contents/Info.plist")) as? [String: Any]
     }
 
     private func remoteRow(label: String, icon: String) -> HostVersionInfo {
@@ -248,7 +285,7 @@ final class HostsModel: ObservableObject {
     /// The newest build in the update feed the installed Rex app uses.
     private static func latestMacBuild() -> String? {
         guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: RexTracker.bundleID),
-              let feed = Bundle(url: appURL)?.infoDictionary?["SUFeedURL"] as? String,
+              let feed = infoPlist(appURL)?["SUFeedURL"] as? String,
               let url = URL(string: feed), let data = try? Data(contentsOf: url) else { return nil }
         let xml = String(decoding: data, as: UTF8.self)
         let regex = try! NSRegularExpression(pattern: #"<sparkle:version>([^<]+)</sparkle:version>|sparkle:version="([^"]+)""#)
@@ -459,6 +496,12 @@ struct HostRow: View {
                     .font(.system(size: 10.5))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                if let detail {
+                    Text(detail)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(host.serverPending ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+                        .lineLimit(1)
+                }
             }
             Spacer(minLength: 4)
             trailing
@@ -469,8 +512,9 @@ struct HostRow: View {
 
     private var subtitle: String {
         var parts: [String] = []
-        if host.label == nil, let running = host.running {
-            parts.append("Rex \(running)")
+        if host.label == nil {
+            // The platform is obvious for this Mac; leave room for the versions.
+            return host.appVersion.map { "App \($0)" } ?? ""
         } else if let d = host.runningDate {
             parts.append("\(d.formatted(.dateTime.month(.abbreviated).day())) build")
         }
@@ -494,9 +538,11 @@ struct HostRow: View {
                 if let behind = behindText { Text(behind).font(.system(size: 9.5)).foregroundStyle(.orange) }
             }
         case .macUpdateAvailable(let build):
-            Text("Build \(build) available")
-                .font(.system(size: 10))
-                .foregroundStyle(.orange)
+            VStack(alignment: .trailing, spacing: 1) {
+                Text("Update").font(.system(size: 10, weight: .semibold))
+                Text("build \(build)").font(.system(size: 9.5))
+            }
+            .foregroundStyle(.orange)
         case .unknown(let why):
             Image(systemName: "questionmark.circle").foregroundStyle(.secondary).help(why)
         case .unreachable:
@@ -527,14 +573,26 @@ struct HostRow: View {
         return days >= 1 ? "\(days)d behind" : "behind"
     }
 
+    /// This Mac's second line: the server version, which updates separately from the app.
+    private var detail: String? {
+        guard host.label == nil, host.running != nil else { return nil }
+        let date = host.runningDate.map { "\($0.formatted(.dateTime.month(.abbreviated).day())) build" }
+        if host.serverPending { return "Server \(date ?? "old build") · new one waiting on restart" }
+        if let build = host.serverBuild { return "Server \(build)" + (date.map { " · \($0)" } ?? "") }
+        return date.map { "Server \($0)" }
+    }
+
     private var tooltip: String {
         var lines = ["Running: \(Versions.describe(host.running))"]
         if host.label != nil {
             lines.append("Installed: \(Versions.describe(host.installed))")
             lines.append("Latest: \(Versions.describe(host.latest))")
             if !host.sessions.isEmpty { lines.append("Sessions: \(host.sessions.joined(separator: ", "))") }
-        } else if let latest = host.latest {
-            lines.append("Latest build: \(latest). Rex updates itself on the Mac.")
+        } else {
+            lines = ["App: \(host.appVersion ?? "unknown")",
+                     "Server running: \(Versions.describe(host.running))",
+                     "Server installed: \(Versions.describe(host.installed))"]
+            if let latest = host.latest { lines.append("Latest app build: \(latest). Rex updates itself on the Mac.") }
         }
         switch host.status {
         case .restartNeeded: lines.append("A newer Rex is installed but the server hasn't restarted onto it.")
