@@ -24,6 +24,17 @@ final class PanelController {
     private var roomMadeFor: AXUIElement?
     /// How much we narrowed Rex, so hiding can give it back.
     private var shrink: (window: AXUIElement, amount: CGFloat, width: CGFloat)?
+    /// The screen Rex was last on, so the desktop spot stays on the same display.
+    private var lastScreen: NSScreen?
+
+    // Drawer mode: when Rex is out of sight the panel tucks away behind a slim
+    // handle on the screen's right edge and slides out while the pointer is on it.
+    private let handle: NSPanel
+    private let handleSize = NSSize(width: 14, height: 120)
+    private var inDrawer = false
+    private var drawerOpen = false
+    private var animating = false
+    private var pointerLeftAt: Date?
 
     private(set) var wantsVisible: Bool {
         didSet { UserDefaults.standard.set(wantsVisible, forKey: "panelVisible") }
@@ -34,6 +45,7 @@ final class PanelController {
         self.model = model
         wantsVisible = UserDefaults.standard.object(forKey: "panelVisible") as? Bool ?? true
         panel = Self.makePanel(model: model, cornerRadius: cornerRadius)
+        handle = Self.makeHandle()
 
         tracker.onChange = { [weak self] in self?.update() }
         // Rex reports moves as they happen, but polling quickly while a mouse
@@ -57,14 +69,16 @@ final class PanelController {
         tick += 1
         let dragging = NSEvent.pressedMouseButtons != 0 && tracker.isActive
         if dragging || tick % 30 == 0 { update() }
+        if inDrawer { trackPointer() }
     }
 
     func update() {
         guard AXIsProcessTrusted() else { return hide("Waiting for Accessibility access") }
-        guard tracker.isRunning else { return hide("Rex isn't running") }
         guard wantsVisible else { return hide("Hidden — ⌃⌥⌘W to show") }
-        guard !tracker.isHidden, var state = tracker.windowState(), !state.isMinimized,
-              tracker.isOnScreenInCurrentSpace() else { return hide("Rex window not visible") }
+        guard tracker.isRunning, !tracker.isHidden, var state = tracker.windowState(), !state.isMinimized,
+              tracker.isOnScreenInCurrentSpace() else { return enterDrawer() }
+        lastScreen = screen(for: state.frame)
+        leaveDrawer()
 
         if let window = tracker.window, roomMadeFor.map({ !CFEqual($0, window) }) ?? true {
             roomMadeFor = window
@@ -90,7 +104,90 @@ final class PanelController {
         setStatus(state.isFullScreen ? "Docked (full screen)" : "Docked to Rex")
     }
 
+    // MARK: Drawer
+
+    /// The screen edge the drawer lives on: the display Rex was last on.
+    private var drawerScreen: NSRect? {
+        (lastScreen.flatMap { s in NSScreen.screens.first { $0 == s } } ?? NSScreen.main)?.visibleFrame
+    }
+
+    private func openFrame(_ v: NSRect) -> NSRect {
+        NSRect(x: v.maxX - width - gap, y: v.minY + gap, width: width, height: v.height - gap * 2)
+    }
+
+    /// Just past the screen edge, where the panel slides in from.
+    private func closedFrame(_ v: NSRect) -> NSRect {
+        openFrame(v).offsetBy(dx: width + gap * 2, dy: 0)
+    }
+
+    /// With Rex out of sight, collapse to a handle on the right edge of the screen.
+    private func enterDrawer() {
+        guard let v = drawerScreen else { return hide("No screen") }
+        if !inDrawer {
+            inDrawer = true
+            drawerOpen = false
+            pointerLeftAt = nil
+            if panel.isVisible { panel.orderOut(nil) }
+            panel.level = .floating
+        }
+        let handleFrame = NSRect(x: v.maxX - handleSize.width, y: v.midY - handleSize.height / 2,
+                                 width: handleSize.width, height: handleSize.height)
+        if handle.frame != handleFrame { handle.setFrame(handleFrame, display: true) }
+        if !handle.isVisible { handle.orderFrontRegardless() }
+        if drawerOpen, !animating, panel.frame != openFrame(v) { panel.setFrame(openFrame(v), display: true) }
+        lastActive = false
+        setStatus(tracker.isRunning ? "Drawer — Rex is out of sight" : "Drawer — Rex isn't running")
+    }
+
+    /// Back to docking beside Rex.
+    private func leaveDrawer() {
+        guard inDrawer else { return }
+        inDrawer = false
+        drawerOpen = false
+        animating = false
+        handle.orderOut(nil)
+        panel.level = .normal
+    }
+
+    /// Opens while the pointer is on the handle or the open drawer; closes shortly after it leaves.
+    private func trackPointer() {
+        let mouse = NSEvent.mouseLocation
+        let onHandle = handle.frame.insetBy(dx: -8, dy: -8).contains(mouse)
+        let onPanel = drawerOpen && panel.frame.insetBy(dx: -12, dy: -12).contains(mouse)
+        if onHandle || onPanel {
+            pointerLeftAt = nil
+            if !drawerOpen { slideDrawer(open: true) }
+        } else if drawerOpen {
+            let left = pointerLeftAt ?? Date()
+            pointerLeftAt = left
+            if Date().timeIntervalSince(left) > 0.4 { slideDrawer(open: false) }
+        }
+    }
+
+    private func slideDrawer(open: Bool) {
+        guard let v = drawerScreen else { return }
+        drawerOpen = open
+        pointerLeftAt = nil
+        animating = true
+        if open {
+            panel.setFrame(closedFrame(v), display: false)
+            panel.orderFrontRegardless()
+        }
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.22
+            ctx.timingFunction = CAMediaTimingFunction(name: open ? .easeOut : .easeIn)
+            panel.animator().setFrame(open ? openFrame(v) : closedFrame(v), display: true)
+        }, completionHandler: { [weak self] in
+            guard let self else { return }
+            self.animating = false
+            // Out of sight once closed, so it can't peek onto a display to the right.
+            if !self.drawerOpen, self.inDrawer { self.panel.orderOut(nil) }
+            self.panel.invalidateShadow()
+        })
+    }
+
     private func hide(_ reason: String) {
+        leaveDrawer()
         if panel.isVisible { panel.orderOut(nil) }
         lastActive = false
         setStatus(reason)
@@ -180,6 +277,21 @@ final class PanelController {
         return panel
     }
 
+    /// The slim pill on the screen edge that opens the drawer.
+    private static func makeHandle() -> NSPanel {
+        let handle = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 14, height: 120),
+                             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        handle.isOpaque = false
+        handle.backgroundColor = .clear
+        handle.hasShadow = true
+        handle.level = .floating
+        handle.hidesOnDeactivate = false
+        handle.isReleasedWhenClosed = false
+        handle.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
+        handle.contentView = NSHostingView(rootView: DrawerHandle())
+        return handle
+    }
+
     private static func roundedMask(radius: CGFloat) -> NSImage {
         let edge = radius * 2 + 1
         let image = NSImage(size: NSSize(width: edge, height: edge), flipped: false) { rect in
@@ -190,5 +302,18 @@ final class PanelController {
         image.capInsets = NSEdgeInsets(top: radius, left: radius, bottom: radius, right: radius)
         image.resizingMode = .stretch
         return image
+    }
+}
+
+/// A tab on the screen edge, rounded on the side facing the screen, with a grip line.
+private struct DrawerHandle: View {
+    var body: some View {
+        let shape = UnevenRoundedRectangle(topLeadingRadius: 7, bottomLeadingRadius: 7, style: .continuous)
+        ZStack {
+            shape.fill(.regularMaterial)
+            shape.strokeBorder(.white.opacity(0.35), lineWidth: 1)
+            Capsule().fill(.primary.opacity(0.55)).frame(width: 3, height: 40)
+        }
+        .environment(\.colorScheme, .dark)
     }
 }
