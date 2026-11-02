@@ -83,7 +83,7 @@ struct AgentsWidget: View {
             } else if model.agents.isEmpty {
                 Text("No Claude Code or Codex sessions running in Rex.").foregroundStyle(.secondary)
             } else {
-                VStack(spacing: 6) {
+                VStack(alignment: .leading, spacing: 6) {
                     ForEach(model.agents) { agent in
                         AgentRow(agent: agent) { model.jump(to: agent) }
                     }
@@ -126,6 +126,7 @@ struct AgentRow: View {
             }
         }
         .padding(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(hovering ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.clear),
                     in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .contentShape(Rectangle())

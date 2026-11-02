@@ -22,6 +22,12 @@ enum RexCLI {
 }
 
 enum Shell {
+    /// Our environment minus Rex's pane variables. When Rex's Tail is launched from a
+    /// Rex pane it inherits REX_SESSION/REX_BLOCK, which would scope every `rex` call
+    /// to that one session and hide panes in all the others.
+    static let environment: [String: String] = ProcessInfo.processInfo.environment
+        .filter { !$0.key.hasPrefix("REX_") }
+
     struct Result {
         var status: Int32
         var output: String
@@ -34,6 +40,7 @@ enum Shell {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: path)
         p.arguments = args
+        p.environment = environment
         let out = Pipe(), err = Pipe(), inp = Pipe()
         p.standardOutput = out
         p.standardError = err
@@ -69,6 +76,7 @@ enum Shell {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: path)
         p.arguments = args
+        p.environment = environment
         let out = Pipe()
         p.standardOutput = out
         p.standardError = FileHandle.nullDevice

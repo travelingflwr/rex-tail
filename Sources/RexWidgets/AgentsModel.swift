@@ -145,11 +145,13 @@ final class AgentsModel: ObservableObject {
             let label = session["label"] as? String ?? "Session"
             for window in view["windows"] as? [[String: Any]] ?? [] {
                 let wid = window["window_id"] as? String ?? ""
+                let tabName = Self.customTabName(window["label"] as? String, windowID: wid)
                 for layer in window["layers"] as? [[String: Any]] ?? [] {
                     for block in layer["blocks"] as? [[String: Any]] ?? [] {
                         guard let bid = block["block_id"] as? String,
                               (block["flavor"] as? String)?.hasSuffix(".terminal.shell") == true,
-                              let hit = inspect(block: bid, host: host, session: sid, sessionLabel: label, window: wid)
+                              let hit = inspect(block: bid, host: host, session: sid, sessionLabel: label, window: wid,
+                                            tabName: tabName)
                         else { continue }
                         found.append(hit)
                     }
@@ -163,9 +165,17 @@ final class AgentsModel: ObservableObject {
         return fillRemote(found, host: host)
     }
 
+    /// A tab name the user set in Rex, or nil for Rex's default "Window <id>" label.
+    /// Rex's sidebar shows the custom name in place of the pane title, so we do too.
+    static func customTabName(_ label: String?, windowID: String) -> String? {
+        guard let label = label?.trimmingCharacters(in: .whitespaces), !label.isEmpty else { return nil }
+        let suffix = String(windowID.replacingOccurrences(of: "-", with: "").suffix(8))
+        return label == "Window \(suffix)" ? nil : label
+    }
+
     /// Reads a pane's foreground program and Rex status; returns it if it's an agent.
     private func inspect(block bid: String, host: RexHost, session sid: String, sessionLabel: String,
-                         window wid: String) -> (AgentInfo, Int32, String)? {
+                         window wid: String, tabName: String?) -> (AgentInfo, Int32, String)? {
         guard let process = RexCLI.json(host.rexArgs + ["block", "call", "-b", bid, "process"]),
               let fg = process["foreground"] as? [String: Any],
               let pidNumber = fg["pid"] as? Int else { return nil }
@@ -187,7 +197,7 @@ final class AgentsModel: ObservableObject {
         }
 
         let cwd = fg["cwd"] as? String ?? ""
-        let title = (RexCLI.json(host.rexArgs + ["block", "call", "-b", bid, "title"])?["title"] as? String)
+        let title = tabName ?? (RexCLI.json(host.rexArgs + ["block", "call", "-b", bid, "title"])?["title"] as? String)
             .flatMap { $0.isEmpty ? nil : $0 } ?? kind.rawValue
         var agent = AgentInfo(
             blockID: bid, hostLabel: host.label, hostIcon: host.icon, sessionID: sid, sessionLabel: sessionLabel,

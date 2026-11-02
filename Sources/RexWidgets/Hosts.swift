@@ -418,7 +418,7 @@ struct HostsWidget: View {
 
     var body: some View {
         WidgetCard(title: "Rex Hosts", systemImage: "server.rack") {
-            VStack(spacing: 4) {
+            VStack(alignment: .leading, spacing: 4) {
                 ForEach(model.hosts) { host in
                     HostRow(host: host) { model.confirmAndUpgrade(host) }
                 }
