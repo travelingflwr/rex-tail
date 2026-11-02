@@ -4,6 +4,7 @@ final class PanelModel: ObservableObject {
     @Published var status = ""
     let weather = WeatherModel()
     let agents = AgentsModel()
+    let hosts = HostsModel()
 }
 
 struct PanelView: View {
@@ -20,6 +21,7 @@ struct PanelView: View {
                 VStack(spacing: 12) {
                     WeatherWidget(model: model.weather)
                     AgentsWidget(model: model.agents)
+                    HostsWidget(model: model.hosts)
                 }
             }
 
