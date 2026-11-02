@@ -99,12 +99,16 @@ final class RexTracker {
         onChange?()
     }
 
-    /// Picks Rex's main window and moves the move/resize observers onto it.
+    /// Picks Rex's main terminal window and moves the move/resize observers onto it.
+    /// Settings, dialogs and other auxiliary windows are skipped, so the panel stays
+    /// on the terminal window while they have focus.
     private func refreshWindow() {
         guard let appElement else { return }
-        let candidate = element(appElement, kAXMainWindowAttribute)
-            ?? element(appElement, kAXFocusedWindowAttribute)
-            ?? ((copy(appElement, kAXWindowsAttribute) as? [AXUIElement])?.first)
+        let windows = (copy(appElement, kAXWindowsAttribute) as? [AXUIElement]) ?? []
+        let candidate = [element(appElement, kAXMainWindowAttribute), element(appElement, kAXFocusedWindowAttribute)]
+            .compactMap { $0 }.first(where: isTerminalWindow)
+            ?? window.flatMap { current in windows.contains { CFEqual($0, current) } ? current : nil }
+            ?? windows.first(where: isTerminalWindow)
         if let current = window, let candidate, CFEqual(current, candidate) { return }
         if candidate == nil && window != nil && windowState() != nil { return } // keep a still-valid window
 
@@ -162,6 +166,14 @@ final class RexTracker {
         }
         onScreenCache = (Date(), value)
         return value
+    }
+
+    /// Rex names its terminal windows `session-AppWindow-N`. If a future build drops
+    /// that identifier, fall back to any standard window that has one of its own buttons.
+    private func isTerminalWindow(_ w: AXUIElement) -> Bool {
+        if let id = copy(w, "AXIdentifier") as? String { return id.hasPrefix("session-") }
+        return (copy(w, kAXSubroleAttribute) as? String) == kAXStandardWindowSubrole
+            && (copy(w, kAXTitleAttribute) as? String).map { !$0.isEmpty } == true
     }
 
     private func element(_ parent: AXUIElement, _ attribute: String) -> AXUIElement? {
