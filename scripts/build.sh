@@ -17,6 +17,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/RexWidgets "$APP/Contents/MacOS/RexWidgets"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp Resources/agent_reader.py "$APP/Contents/Resources/agent_reader.py"
+cp Resources/menubar.svg "$APP/Contents/Resources/menubar.svg"
 
 IDENTITY="${SIGN_IDENTITY:-Apple Development}"
 codesign --force --options runtime --timestamp=none \

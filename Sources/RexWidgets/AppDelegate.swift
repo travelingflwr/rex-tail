@@ -41,8 +41,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func setUpStatusItem() {
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        statusItem.button?.image = NSImage(systemSymbolName: "sidebar.right", accessibilityDescription: "Rex's Tail")
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        statusItem.button?.image = Self.menuBarIcon()
 
         let menu = NSMenu()
         menu.delegate = self
@@ -54,6 +54,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(NSMenuItem(title: "Quit Rex's Tail", action: #selector(NSApplication.terminate(_:)),
                                 keyEquivalent: "q"))
         statusItem.menu = menu
+    }
+
+    /// The logo's silhouette (Resources/menubar.svg, made by scripts/make_logo.py) as a
+    /// template image, so macOS tints it to match the menu bar.
+    private static func menuBarIcon() -> NSImage? {
+        guard let url = Bundle.main.url(forResource: "menubar", withExtension: "svg"),
+              let image = NSImage(contentsOf: url) else {
+            return NSImage(systemSymbolName: "sidebar.right", accessibilityDescription: "Rex's Tail")
+        }
+        let height: CGFloat = 16
+        image.size = NSSize(width: (height * image.size.width / image.size.height).rounded(), height: height)
+        image.isTemplate = true
+        image.accessibilityDescription = "Rex's Tail"
+        return image
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {

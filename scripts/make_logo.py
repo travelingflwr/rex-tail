@@ -23,7 +23,7 @@ def path_d():
     return (f"M{P(a)} C{P(b)} {P(c)} {P(d)} C{P(f)} {P(g)} {P(h)} "
             f"C246,774 266,770 {P(i)} C{P(j)} {P(k)} {P(l)} C{P(n)} {P(o)} {P(p)} Z")
 
-def spikes():
+def spikes(style='fill="url(#spike)" stroke="#123d22" stroke-width="5" stroke-linejoin="round"', grow=1.0):
     """Back plates along the upper edge, shrinking toward the tip."""
     out = []
     samples = []
@@ -36,6 +36,7 @@ def spikes():
         lengths.append(lengths[-1] + math.dist(p, q))
     total = lengths[-1]
     for frac, size in [(0.07, 60), (0.19, 54), (0.31, 47), (0.43, 40), (0.55, 33), (0.67, 26), (0.78, 20), (0.88, 15)]:
+        size *= grow
         target = frac * total
         idx = next(i for i, L in enumerate(lengths) if L >= target)
         x, y = samples[idx]
@@ -51,7 +52,7 @@ def spikes():
         f = lambda p: f"{p[0]:.1f},{p[1]:.1f}"
         out.append(f'<path d="M{f(base1)} Q{f(((base1[0]+tipp[0])/2 - tx*4, (base1[1]+tipp[1])/2 - ty*4))} {f(tipp)} '
                    f'Q{f(((base2[0]+tipp[0])/2 + nx*4, (base2[1]+tipp[1])/2 + ny*4))} {f(base2)} Z" '
-                   f'fill="url(#spike)" stroke="#123d22" stroke-width="5" stroke-linejoin="round"/>')
+                   f'{style}/>')
     return "\n    ".join(out)
 
 def disk():
@@ -117,7 +118,26 @@ svg = f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width=
 </svg>
 '''
 
-out = Path(__file__).resolve().parent.parent / "assets" / "logo.svg"
-out.parent.mkdir(exist_ok=True)
-out.write_text(svg)
-print(out)
+# Menu bar version: a one-colour silhouette that macOS draws as a template image
+# (tinted and glassy to match the menu bar). Gaps separate tail, disk and plate.
+menubar = f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="190 262 650 536" width="38.8" height="32">
+  <defs>
+    <mask id="gaps" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+      <rect width="1024" height="1024" fill="#fff"/>
+      <rect x="700" y="0" width="26" height="1024" fill="#000"/>
+    </mask>
+  </defs>
+  <g mask="url(#gaps)">
+    {spikes('fill="#000"', grow=1.35)}
+    <path d="{path_d()}" fill="#000"/>
+  </g>
+  <rect x="726" y="364" width="44" height="192" rx="10" fill="#000"/>
+  <rect x="790" y="272" width="50" height="516" rx="14" fill="#000"/>
+</svg>
+'''
+
+root = Path(__file__).resolve().parent.parent
+for path, text in [(root / "assets" / "logo.svg", svg), (root / "Resources" / "menubar.svg", menubar)]:
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(text)
+    print(path)
