@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <clipPath id="tile"><rect x="100" y="100" width="824" height="824" rx="186"/></clipPath>
+    <radialGradient id="bg" cx="35%" cy="30%" r="85%">
+      <stop offset="0" stop-color="#2a3446"/><stop offset="1" stop-color="#0d1119"/>
+    </radialGradient>
+    <linearGradient id="steel" x1="0" x2="1">
+      <stop offset="0" stop-color="#5d6570"/><stop offset=".12" stop-color="#c9d0d8"/>
+      <stop offset=".45" stop-color="#eef1f4"/><stop offset=".75" stop-color="#a7afb9"/>
+      <stop offset="1" stop-color="#7b838e"/>
+    </linearGradient>
+    <pattern id="brush" width="1024" height="6" patternUnits="userSpaceOnUse">
+      <rect width="1024" height="2" fill="#ffffff" opacity=".10"/>
+    </pattern>
+    <radialGradient id="rivet" cx="35%" cy="35%" r="70%">
+      <stop offset="0" stop-color="#ffffff"/><stop offset=".5" stop-color="#b9c0c8"/><stop offset="1" stop-color="#5a616b"/>
+    </radialGradient>
+    <linearGradient id="skin" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5fd17a"/><stop offset=".55" stop-color="#2f9e52"/><stop offset="1" stop-color="#1d6b37"/>
+    </linearGradient>
+    <linearGradient id="spike" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#b8f06a"/><stop offset="1" stop-color="#4fb35d"/>
+    </linearGradient>
+    <linearGradient id="red" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ff5a4e"/><stop offset=".6" stop-color="#d4232a"/><stop offset="1" stop-color="#9c1419"/>
+    </linearGradient>
+    <linearGradient id="disk" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#8e96a1"/><stop offset=".3" stop-color="#e9edf1"/>
+      <stop offset=".7" stop-color="#b7bec7"/><stop offset="1" stop-color="#6e7681"/>
+    </linearGradient>
+    <linearGradient id="pole" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f4f6f8"/><stop offset=".5" stop-color="#b3bac3"/><stop offset="1" stop-color="#7d858f"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="14" stdDeviation="14" flood-color="#000" flood-opacity=".45"/>
+    </filter>
+  </defs>
+  <g clip-path="url(#tile)">
+    <rect x="100" y="100" width="824" height="824" fill="url(#bg)"/>
+    <!-- steel plate on the right edge -->
+    <rect x="772" y="100" width="160" height="824" fill="url(#steel)"/>
+    <rect x="772" y="100" width="160" height="824" fill="url(#brush)"/>
+    <rect x="772" y="100" width="6" height="824" fill="#2b3038" opacity=".55"/>
+    <circle cx="850" cy="232" r="17" fill="url(#rivet)" stroke="#4a5059" stroke-width="3"/>
+    <circle cx="850" cy="792" r="17" fill="url(#rivet)" stroke="#4a5059" stroke-width="3"/>
+    <g filter="url(#shadow)">
+    <path d="M710.0,394.3 Q696.7,358.1 675.5,320.4 Q661.1,347.2 645.2,381.8 Z" fill="url(#spike)" stroke="#123d22" stroke-width="5" stroke-linejoin="round"/>
+    <path d="M609.4,375.2 Q596.3,342.9 575.4,309.5 Q563.6,334.1 550.6,366.5 Z" fill="url(#spike)" stroke="#123d22" stroke-width="5" stroke-linejoin="round"/>
+    <path d="M507.2,361.7 Q493.4,334.6 471.7,307.2 Q463.8,329.4 455.5,359.6 Z" fill="url(#spike)" stroke="#123d22" stroke-width="5" stroke-linejoin="round"/>
+    <path d="M405.8,361.6 Q389.7,341.2 365.8,322.4 Q363.4,342.2 362.6,369.8 Z" fill="url(#spike)" stroke="#123d22" stroke-width="5" stroke-linejoin="round"/>
+    <path d="M311.8,391.4 Q291.2,385.0 265.2,384.5 Q273.3,398.6 287.3,418.1 Z" fill="url(#spike)" stroke="#123d22" stroke-width="5" stroke-linejoin="round"/>
+    <path d="M256.6,475.7 Q239.4,476.8 219.7,485.5 Q229.8,492.9 247.6,502.9 Z" fill="url(#spike)" stroke="#123d22" stroke-width="5" stroke-linejoin="round"/>
+    <path d="M234.1,567.8 Q220.8,570.5 206.7,581.2 Q215.4,585.1 232.0,589.7 Z" fill="url(#spike)" stroke="#123d22" stroke-width="5" stroke-linejoin="round"/>
+    <path d="M230.5,650.5 Q220.2,653.1 210.3,663.7 Q216.9,665.6 231.5,667.0 Z" fill="url(#spike)" stroke="#123d22" stroke-width="5" stroke-linejoin="round"/>
+    <path d="M738,394 C580,362 420,330 320,380 C240,430 200,600 240,760 C246,774 266,770 262,750 C240,620 280,500 340,480 C440,450 580,524 738,526 Z" fill="url(#skin)" stroke="#123d22" stroke-width="7" stroke-linejoin="round"/>
+    <path d="M712,512 C560,505 430,450 345,465 C292,478 262,560 258,690" fill="none" stroke="#a6e8a0" stroke-width="16" stroke-linecap="round" opacity=".45"/>
+    <rect x="722" y="372" width="52" height="176" rx="12" fill="url(#disk)" stroke="#3a3f47" stroke-width="6"/>
+    <rect x="731" y="386" width="7" height="148" rx="3.5" fill="#ffffff" opacity=".75"/>
+    <rect x="760" y="380" width="5" height="160" rx="2.5" fill="#2b3038" opacity=".35"/>
+    </g>
+  </g>
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="none" stroke="#ffffff" stroke-opacity=".08" stroke-width="4"/>
+</svg>

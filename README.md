@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/logo.svg" alt="Rex's Tail logo: a dino tail mounted on a steel plate" width="160"></p>
+
 # Rex's Tail
 
 A widget panel that docks to the right side of the Rex terminal window on macOS.
