@@ -1,5 +1,6 @@
 import AppKit
 import Carbon
+import ServiceManagement
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let tracker = RexTracker()
@@ -12,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let toggleItem = NSMenuItem(title: "Hide Panel", action: #selector(togglePanel), keyEquivalent: "")
     private let accessItem = NSMenuItem(title: "Grant Accessibility Access…", action: #selector(openAccessibility),
                                         keyEquivalent: "")
+    private let loginItem = NSMenuItem(title: "Open at Login", action: #selector(toggleOpenAtLogin), keyEquivalent: "")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         panel = PanelController(tracker: tracker, model: model)
@@ -48,8 +50,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.delegate = self
         toggleItem.target = self
         accessItem.target = self
+        loginItem.target = self
         menu.addItem(toggleItem)
         menu.addItem(accessItem)
+        menu.addItem(.separator())
+        menu.addItem(loginItem)
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit Rex's Tail", action: #selector(NSApplication.terminate(_:)),
                                 keyEquivalent: "q"))
@@ -73,6 +78,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         toggleItem.title = (panel.wantsVisible ? "Hide Panel" : "Show Panel") + "  ⌃⌥⌘W"
         accessItem.isHidden = AXIsProcessTrusted()
+        switch SMAppService.mainApp.status {
+        case .enabled: loginItem.state = .on; loginItem.title = "Open at Login"
+        case .requiresApproval: loginItem.state = .mixed; loginItem.title = "Open at Login (approve in Settings…)"
+        default: loginItem.state = .off; loginItem.title = "Open at Login"
+        }
+    }
+
+    /// Adds or removes Rex's Tail as a login item (System Settings > General > Login Items).
+    @objc private func toggleOpenAtLogin() {
+        let service = SMAppService.mainApp
+        do {
+            switch service.status {
+            case .enabled: try service.unregister()
+            case .requiresApproval: SMAppService.openSystemSettingsLoginItems()
+            default: try service.register()
+            }
+        } catch {
+            NSLog("Rex's Tail: Open at Login failed: \(error.localizedDescription)")
+            SMAppService.openSystemSettingsLoginItems()
+        }
     }
 
     @objc private func togglePanel() { panel.toggle() }
