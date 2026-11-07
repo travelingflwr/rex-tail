@@ -29,6 +29,7 @@ struct HostVersionInfo: Identifiable, Equatable {
     var canRestart = false           // rex-user.service exists and is what's running
     var restartBlocked: String?      // why Restart is unavailable, when it is
     var hasRexurrect = false
+    var strayServer = false          // a Rex server without --tailscale holds the socket, so the service can't start
     var status: Status = .checking
     // This Mac only: the Rex app and its bundled server are versioned separately.
     var appVersion: String?          // "0.1.0 (1754)"
@@ -60,7 +61,33 @@ final class HostsModel: ObservableObject {
         var unitActive = false
         var hasRexurrect = false
         var sudo = false
+        var stray = false
     }
+
+    /// Shell that prints the PIDs of this user's Rex servers listening on the
+    /// default socket without --tailscale: servers a rex command or another app
+    /// autostarted, which keep rex-user.service (and the host's tailnet node)
+    /// from starting.
+    static let strayServers = #"""
+    stray_servers() {
+        sock=/run/user/$(id -u)/rex/server.sock
+        for pid in $(pgrep -u "$(id -u)" -f "rex server run"); do
+            cmd=$(tr '\0' ' ' </proc/"$pid"/cmdline 2>/dev/null) || continue
+            case " $cmd " in *" --listen unix://$sock "*|*" --listen $sock "*) ;; *) continue ;; esac
+            case "$cmd" in *--tailscale*) continue ;; esac
+            echo "$pid"
+        done
+    }
+    stop_stray() {
+        for pid in $(stray_servers); do
+            echo "==> stopping Rex server $pid, which holds the socket without Tailscale"
+            kill -TERM "$pid" 2>/dev/null || true
+            i=0; while kill -0 "$pid" 2>/dev/null && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
+            kill -KILL "$pid" 2>/dev/null || true
+        done
+    }
+
+    """#
 
     func start() {
         refresh(full: true)
@@ -191,6 +218,15 @@ final class HostsModel: ObservableObject {
         var row = HostVersionInfo(label: label, icon: icon)
         guard let server = RexCLI.json(["-S", label, "api", "call", "server.version"]) else {
             row.status = .unreachable
+            // The facts may be hours old, and this is when they matter: a server
+            // that took the socket without Tailscale is the usual reason after a
+            // restart, and Restart can fix it.
+            if let f = Self.remoteFacts(ssh: label.lowercased()) {
+                row.installed = f.installed
+                row.hasRexurrect = f.hasRexurrect
+                row.strayServer = f.hasUserUnit && f.stray
+                row.canRestart = row.strayServer
+            }
             return row
         }
         row.running = server["rex_version"] as? String
@@ -208,7 +244,10 @@ final class HostsModel: ObservableObject {
         // Only restart through systemd when systemd is what runs the server;
         // otherwise a second server would start beside the one already running.
         row.canRestart = f.hasUserUnit && f.unitActive
-        if !f.hasUserUnit {
+        if f.hasUserUnit && f.stray {
+            row.strayServer = true
+            row.canRestart = true
+        } else if !f.hasUserUnit {
             row.restartBlocked = "This host has no rex-user.service to restart."
         } else if !f.unitActive {
             row.restartBlocked = "Rex here isn't running under rex-user.service (it was started another way), so restarting the service would start a second server. Restart it by hand."
@@ -239,7 +278,7 @@ final class HostsModel: ObservableObject {
     }
 
     private static func remoteFacts(ssh host: String) -> RemoteFacts? {
-        let script = #"""
+        let script = strayServers + #"""
         printf 'installed=%s\n' "$(dpkg-query -W -f='${Version}' rex 2>/dev/null)"
         printf 'suite=%s\n' "$(sed -n 's/^Suites: *//p' /etc/apt/sources.list.d/rex.sources 2>/dev/null | head -1)"
         printf 'arch=%s\n' "$(dpkg --print-architecture 2>/dev/null)"
@@ -247,6 +286,7 @@ final class HostsModel: ObservableObject {
         systemctl --user is-active --quiet rex-user.service && echo active=yes
         systemctl --user cat rexurrect-autosave.service >/dev/null 2>&1 && echo rexurrect=yes
         sudo -n true 2>/dev/null && echo sudo=yes
+        [ -n "$(stray_servers)" ] && echo stray=yes
         exit 0
         """#
         let r = Shell.ssh(host, script: script)
@@ -263,6 +303,7 @@ final class HostsModel: ObservableObject {
             case "active": f.unitActive = true
             case "rexurrect": f.hasRexurrect = true
             case "sudo": f.sudo = true
+            case "stray": f.stray = true
             default: break
             }
         }
@@ -317,6 +358,9 @@ final class HostsModel: ObservableObject {
         var steps: [String] = []
         if upgrading { steps.append("• install the newer rex package with apt (sudo)") }
         if host.hasRexurrect { steps.append("• save your sessions with rexurrect") }
+        steps.append(host.strayServer
+            ? "• stop the Rex server that took this host's socket without Tailscale, so rex-user.service can start (its sessions will close)"
+            : "• stop any Rex server that takes this host's socket without Tailscale during the restart")
         steps.append("• restart rex-user.service, the Rex server your Mac connects to")
         info.append("Over SSH to \(label.lowercased()), this will:\n" + steps.joined(separator: "\n"))
         if !host.sessions.isEmpty {
@@ -351,7 +395,26 @@ final class HostsModel: ObservableObject {
             if host.hasRexurrect {
                 script += "echo '==> saving sessions'\nsystemctl --user start rexurrect-autosave.service || true\n"
             }
-            script += "echo '==> restarting rex-user.service'\nsystemctl --user restart rex-user.service\n"
+            // Restarting leaves a moment with no server, and a rex command or an
+            // app can autostart one without Tailscale in it. Stop the service,
+            // clear any such server, start it, and check it took the socket.
+            script = Self.strayServers + script
+            script += """
+            echo '==> restarting rex-user.service'
+            systemctl --user stop rex-user.service
+            stop_stray
+            systemctl --user reset-failed rex-user.service 2>/dev/null || true
+            systemctl --user start rex-user.service
+            sleep 3
+            if ! systemctl --user is-active --quiet rex-user.service; then
+                stop_stray
+                systemctl --user reset-failed rex-user.service 2>/dev/null || true
+                systemctl --user start rex-user.service
+                sleep 3
+                systemctl --user is-active --quiet rex-user.service || { echo "rex-user.service didn't start: $(journalctl --user -u rex-user.service -n 1 -o cat 2>/dev/null)" >&2; exit 1; }
+            fi
+
+            """
 
             let r = Shell.ssh(label.lowercased(), script: script)
             guard r.ok else {
@@ -545,6 +608,11 @@ struct HostRow: View {
             .foregroundStyle(.orange)
         case .unknown(let why):
             Image(systemName: "questionmark.circle").foregroundStyle(.secondary).help(why)
+        case .unreachable where host.strayServer:
+            HStack(spacing: 4) {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                actionButton("Restart", enabled: host.canRestart)
+            }
         case .unreachable:
             Image(systemName: "wifi.slash").foregroundStyle(.secondary)
         case .working(let what):
@@ -595,13 +663,15 @@ struct HostRow: View {
             if let latest = host.latest { lines.append("Latest app build: \(latest). Rex updates itself on the Mac.") }
         }
         switch host.status {
-        case .restartNeeded: lines.append("A newer Rex is installed but the server hasn't restarted onto it.")
-        case .restartNeeded where !host.canRestart:
-            lines.append(host.restartBlocked ?? "Restart isn't available on this host.")
+        case .restartNeeded:
+            lines.append("A newer Rex is installed but the server hasn't restarted onto it.")
+            if !host.canRestart { lines.append(host.restartBlocked ?? "Restart isn't available on this host.") }
         case .updateAvailable where !(host.canUpgrade && host.canRestart):
             lines.append(host.restartBlocked ?? "Upgrade needs apt with passwordless sudo and rex-user.service on this host.")
         case .failed(let why): lines.append("Last attempt failed: \(why)")
         case .unknown(let why): lines.append(why)
+        case .unreachable where host.strayServer:
+            lines.append("Another Rex server took this host's socket without Tailscale (a rex command or an app started it), so rex-user.service can't start. Restart stops it and starts the service.")
         case .unreachable: lines.append("Rex on this host isn't answering.")
         default: break
         }
