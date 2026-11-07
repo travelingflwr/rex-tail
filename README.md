@@ -4,7 +4,7 @@
 
 A widget panel that docks to the right side of the Rex terminal window on macOS.
 
-Rex's Tail is a separate app. It doesn't modify, patch or inject anything into Rex. It follows Rex's window using the macOS Accessibility API and gets its data from Rex's public `rex` command-line tool.
+Rex's Tail is a separate, independent app, not made by Superlogical. It doesn't modify, patch or inject anything into Rex. It follows Rex's window using the macOS Accessibility API and gets its data from Rex's public `rex` command-line tool.
 
 ## Widgets
 
@@ -16,12 +16,15 @@ Rex's Tail is a separate app. It doesn't modify, patch or inject anything into R
   - context size and output tokens; hover for the full token breakdown
 
   Click a card to jump to that pane.
+- **Hosts.** The Rex version on this Mac and on each Rex host: what's running, what's installed, and whether a newer release is out. Where a host allows it, **Upgrade** installs the newer `rex` package and **Restart** restarts its Rex server. Both always ask first and list exactly what they'll do (see How it works).
 
 ## How it works
 
 - **Docking.** The panel is a borderless window placed beside Rex's main window. When it appears, it narrows Rex just enough to fit and gives the width back when hidden. It follows Rex across moves, resizes, Spaces and full screen. When Rex isn't the app in front (another app is active, or Rex is hidden, minimized, quit or on another Space), the panel becomes a drawer: a slim handle on the right edge of the screen. Point at the handle and the panel slides out over other apps; move away and it slides back. It re-docks when Rex comes back.
 - **Local agents.** Rex reports each pane's foreground program and status. Token usage comes from the agents' own logs: `~/.claude/projects/…/<session>.jsonl` for Claude Code and `~/.codex/sessions/…/rollout-*.jsonl` for Codex.
 - **Remote agents.** Status comes from `rex -S <host>`. For token usage, Rex's Tail keeps one SSH connection per host and runs `Resources/agent_reader.py` there. The script only reads the agent logs and returns summary numbers. It's sent over the connection each time, so nothing is installed on the remote machine. The SSH alias must be the Rex host label in lowercase, and key-based login must work without a prompt (`BatchMode=yes`).
+
+- **Hosts.** This Mac's versions come from the Rex app on disk, and the newest release from the app's own update feed. A remote host is checked over SSH, the same way as remote agents: the installed `rex` package, its apt channel, and whether it runs as `rex-user.service`. The newest Linux release comes from Superlogical's apt repository (`pkgs.superlogical.com`). **Upgrade** appears only on hosts where `sudo` works without a password. It runs `sudo apt-get install --only-upgrade rex`, saves your sessions first with `rexurrect` if it's installed, then restarts `rex-user.service`. **Restart** does the last step alone. Nothing runs until you confirm.
 
 ## Build
 
@@ -31,7 +34,7 @@ You need macOS 15 or later, Xcode or the Swift 6 toolchain, and Rex.
 scripts/build.sh --run
 ```
 
-The script builds `build/Rex's Tail.app` and signs it with your `Apple Development` certificate. Override the certificate with `SIGN_IDENTITY`. Signing with the same certificate every time keeps the Accessibility permission across rebuilds.
+The script builds `build/Rex's Tail.app` and signs it with your `Apple Development` certificate. Override the certificate with `SIGN_IDENTITY`. Signing with the same certificate every time keeps the Accessibility permission across rebuilds. Without a certificate, the script signs the app for your Mac only, and macOS asks for the Accessibility permission again after each rebuild.
 
 On first launch, allow **Rex's Tail** in System Settings → Privacy & Security → Accessibility.
 
