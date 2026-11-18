@@ -590,9 +590,20 @@ final class HostsModel: ObservableObject {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             if step != .server {
                 guard let id = Self.macClientID() else { self?.finish(host.id, .failed("The Rex app isn't connected")); return }
-                _ = RexCLI.run(["-C", id, "do", "client.update.check"])
+                // client.update.install downloads the update itself if needed. It is
+                // refused while the updater is busy (checking or downloading on its
+                // own), so wait that out first.
+                for _ in 0..<60 {
+                    let phase = RexCLI.json(["-C", id, "do", "client.update.status"])?["phase"] as? String
+                    if phase == nil || !["checking", "downloading", "extracting", "installing"].contains(phase!) { break }
+                    Thread.sleep(forTimeInterval: 2)
+                }
                 // Relaunches the app, so the call may end without an answer.
-                _ = RexCLI.runLong(["--timeout", "300s", "-C", id, "do", "client.update.install"])
+                let r = RexCLI.runLong(["--timeout", "300s", "-C", id, "do", "client.update.install"])
+                if !r.ok, r.error.contains("in progress") {
+                    Thread.sleep(forTimeInterval: 5)
+                    _ = RexCLI.runLong(["--timeout", "300s", "-C", id, "do", "client.update.install"])
+                }
                 self?.setStatus(host.id, .working("Waiting for Rex…"))
                 var back = false
                 for _ in 0..<150 {   // up to 5 minutes to download, install and relaunch
