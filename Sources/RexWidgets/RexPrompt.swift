@@ -1,8 +1,9 @@
 import Foundation
 
-/// Asks a question in Rex's command palette with `rex.ui.pick`, through
-/// `rex do`. Rex shows it in every connected Rex app that can show prompts
-/// (the Mac, an iPad, a phone, Rex Linux) and the first answer wins.
+/// Asks a question in Rex's command palette with `rex.ui.pick`, through the
+/// `rex_tail_pick` action (rex/rex_tail.lua). Rex shows it in every connected
+/// Rex app that can show prompts (the Mac, an iPad, a phone, Rex Linux), and
+/// the first answer wins.
 ///
 /// When no app can show it (`unsupported`, `no_client`, `busy`, `failed`, or
 /// `rex` itself fails), the caller falls back to asking on this Mac.
@@ -22,52 +23,37 @@ enum RexPrompt {
     }
 
     /// Blocks until there's an answer, so call it off the main thread.
+    ///
+    /// Rex shows prompts only from actions the server's init.lua defines,
+    /// not from scripts sent with `rex do -e`, so this calls the
+    /// `rex_tail_pick` action from rex/rex_tail.lua. Without it installed,
+    /// `rex do` fails and the caller asks on this Mac instead.
     static func pick(title: String, placeholder: String? = nil, items: [Item],
                      timeout: Int = 300) -> Answer {
-        let script = luaScript(title: title, placeholder: placeholder, items: items, timeout: timeout)
-        // rex do waits for the person; give it a little longer than the prompt.
-        let r = RexCLI.runLong(["do", "--timeout", "\(timeout + 15)s", "-e", script])
+        var args = ["do", "--timeout", "\(timeout + 15)s", "rex_tail_pick",
+                    "title=\(title)", "items=\(itemsJSON(items))", "timeout=\(timeout)"]
+        if let p = placeholder { args.append("placeholder=\(p)") }
+        let r = RexCLI.runLong(args)
         guard r.ok,
               let data = r.output.trimmingCharacters(in: .whitespacesAndNewlines).data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else {
-            return .unavailable(r.ok ? "unreadable answer" : "rex do failed (exit \(r.status))")
+            return .unavailable(r.ok ? "unreadable answer" : "rex do failed (exit \(r.status)): \(r.error)")
         }
         if let id = obj["answer"] as? String { return .picked(id) }
         let why = obj["why"] as? String ?? "failed"
         return why == "cancelled" || why == "timeout" ? .cancelled : .unavailable(why)
     }
 
-    static func luaScript(title: String, placeholder: String?, items: [Item], timeout: Int) -> String {
-        var rows: [String] = []
-        for it in items {
-            var f = ["id = \(lua(it.id))", "title = \(lua(it.title))"]
-            if let s = it.subtitle { f.append("subtitle = \(lua(s))") }
-            if let s = it.icon { f.append("icon = \(lua(s))") }
-            if let s = it.detail { f.append("detail = \(lua(s))") }
-            rows.append("{ " + f.joined(separator: ", ") + " }")
+    static func itemsJSON(_ items: [Item]) -> String {
+        let list: [[String: String]] = items.map { it in
+            var d = ["id": it.id, "title": it.title]
+            if let s = it.subtitle { d["subtitle"] = s }
+            if let s = it.icon { d["icon"] = s }
+            if let s = it.detail { d["detail"] = s }
+            return d
         }
-        var args = ["title = \(lua(title))", "timeout = \(timeout)", "items = { \(rows.joined(separator: ", ")) }"]
-        if let p = placeholder { args.append("placeholder = \(lua(p))") }
-        return """
-        local answer, why = rex.ui.pick{ \(args.joined(separator: ", ")) }
-        return { answer = answer, why = why }
-        """
-    }
-
-    /// A Lua string literal for s. Host and session names come from other
-    /// machines, so every character that could end the string is escaped.
-    static func lua(_ s: String) -> String {
-        var out = "\""
-        for c in s.unicodeScalars {
-            switch c.value {
-            case 0x5c: out += "\\\\"
-            case 0x22: out += "\\\""
-            case 0x0a: out += "\\n"
-            case 0..<0x20, 0x7f: out += String(format: "\\%03d", c.value)
-            default: out.unicodeScalars.append(c)
-            }
-        }
-        return out + "\""
+        let data = (try? JSONSerialization.data(withJSONObject: list)) ?? Data("[]".utf8)
+        return String(decoding: data, as: UTF8.self)
     }
 }
