@@ -345,37 +345,92 @@ final class HostsModel: ObservableObject {
 
     // MARK: Upgrading
 
+    /// What an Upgrade or Restart will do, said once for both ways of asking.
+    private struct Plan {
+        var upgrading: Bool
+        var target: String?
+        var title: String       // "Upgrade Rex on Mallard?"
+        var action: String      // "Upgrade"
+        var versions: String    // "Running … → New …"
+        var steps: [String]
+        var sessionsNote: String?
+    }
+
+    private func plan(_ host: HostVersionInfo, label: String) -> Plan {
+        let upgrading = host.status == .updateAvailable
+        let target = upgrading ? host.latest : host.installed
+        var steps: [String] = []
+        if upgrading { steps.append("install the newer rex package with apt (sudo)") }
+        if host.hasRexurrect { steps.append("save your sessions with rexurrect") }
+        steps.append(host.strayServer
+            ? "stop the Rex server that took this host's socket without Tailscale, so rex-user.service can start (its sessions will close)"
+            : "stop any Rex server that takes this host's socket without Tailscale during the restart")
+        steps.append("restart rex-user.service, the Rex server your Mac connects to")
+        var note: String?
+        if !host.sessions.isEmpty {
+            note = "Open sessions on \(label): \(host.sessions.joined(separator: ", ")). They may close when the server restarts"
+                + (host.hasRexurrect ? "; rexurrect will have saved them first." : ", and this host has no rexurrect to save them.")
+        }
+        return Plan(upgrading: upgrading, target: target,
+                    title: upgrading ? "Upgrade Rex on \(label)?" : "Restart Rex on \(label)?",
+                    action: upgrading ? "Upgrade" : "Restart",
+                    versions: "Running \(Versions.describe(host.running)) → New \(Versions.describe(target))",
+                    steps: steps, sessionsNote: note)
+    }
+
     /// Asks first, then upgrades (or restarts) Rex on a remote host over SSH.
+    /// The question goes to Rex's command palette, so it reaches every Rex app
+    /// you have open (Mac, iPad, phone) and the first answer wins. When no Rex
+    /// app can show it, it's asked here with a dialog instead.
     func confirmAndUpgrade(_ host: HostVersionInfo) {
         guard let label = host.label else { return }
-        let upgrading = host.status == .updateAvailable
-        let alert = NSAlert()
-        alert.messageText = upgrading ? "Upgrade Rex on \(label)?" : "Restart Rex on \(label)?"
-
-        var info: [String] = []
-        let target = upgrading ? host.latest : host.installed
-        info.append("Running: \(Versions.describe(host.running))\nNew: \(Versions.describe(target))")
-        var steps: [String] = []
-        if upgrading { steps.append("• install the newer rex package with apt (sudo)") }
-        if host.hasRexurrect { steps.append("• save your sessions with rexurrect") }
-        steps.append(host.strayServer
-            ? "• stop the Rex server that took this host's socket without Tailscale, so rex-user.service can start (its sessions will close)"
-            : "• stop any Rex server that takes this host's socket without Tailscale during the restart")
-        steps.append("• restart rex-user.service, the Rex server your Mac connects to")
-        info.append("Over SSH to \(label.lowercased()), this will:\n" + steps.joined(separator: "\n"))
-        if !host.sessions.isEmpty {
-            let names = host.sessions.joined(separator: ", ")
-            info.append("Open sessions on \(label): \(names). They may close when the server restarts"
-                        + (host.hasRexurrect ? "; rexurrect will have saved them first." : ", and this host has no rexurrect to save them."))
+        let p = plan(host, label: label)
+        // Its own thread: the answer can take minutes, and the hosts queue
+        // keeps refreshing the widget meanwhile.
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            switch Self.askInRex(p, label: label) {
+            case .picked("go"):
+                DispatchQueue.main.async { self?.run(host, upgrading: p.upgrading, target: p.target) }
+            case .picked, .cancelled:
+                return
+            case .unavailable:
+                DispatchQueue.main.async { self?.askHere(host, p) }
+            }
         }
-        alert.informativeText = info.joined(separator: "\n\n")
-        alert.addButton(withTitle: upgrading ? "Upgrade" : "Restart")
-        alert.addButton(withTitle: "Cancel")
-        alert.alertStyle = host.sessions.isEmpty ? .informational : .warning
+    }
 
+    /// The palette version: the action first (Return takes it), then each step
+    /// as a row so it's all in view, then Cancel. Choosing a step row asks again.
+    private static func askInRex(_ p: Plan, label: String) -> RexPrompt.Answer {
+        var items = [RexPrompt.Item(id: "go", title: "\(p.action) Rex on \(label)", subtitle: p.versions, icon: "server")]
+        for (i, step) in p.steps.enumerated() {
+            items.append(.init(id: "step\(i)", title: step, subtitle: i == 0 ? "Over SSH to \(label.lowercased()), this will:" : nil,
+                               icon: "gear", detail: "\(i + 1)/\(p.steps.count)"))
+        }
+        if let note = p.sessionsNote { items.append(.init(id: "sessions", title: note, icon: "terminal")) }
+        items.append(.init(id: "cancel", title: "Cancel"))
+        for _ in 0..<5 {
+            let a = RexPrompt.pick(title: p.title, placeholder: "\(p.action) or Cancel", items: items)
+            if case .picked(let id) = a, id != "go", id != "cancel" { continue }
+            return a
+        }
+        return .cancelled
+    }
+
+    private func askHere(_ host: HostVersionInfo, _ p: Plan) {
+        guard let label = host.label else { return }
+        let alert = NSAlert()
+        alert.messageText = p.title
+        var info = [p.versions.replacingOccurrences(of: " → ", with: "\n")]
+        info.append("Over SSH to \(label.lowercased()), this will:\n" + p.steps.map { "• " + $0 }.joined(separator: "\n"))
+        if let note = p.sessionsNote { info.append(note) }
+        alert.informativeText = info.joined(separator: "\n\n")
+        alert.addButton(withTitle: p.action)
+        alert.addButton(withTitle: "Cancel")
+        alert.alertStyle = p.sessionsNote == nil ? .informational : .warning
         NSApp.activate(ignoringOtherApps: true)
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        run(host, upgrading: upgrading, target: target)
+        run(host, upgrading: p.upgrading, target: p.target)
     }
 
     private func run(_ host: HostVersionInfo, upgrading: Bool, target: String?) {

@@ -15,6 +15,14 @@ enum RexCLI {
         return Shell.run(path, ["--timeout", "3s"] + args)
     }
 
+    /// For a call that waits on a person, like `rex do` showing a prompt: no
+    /// 3-second limit (the caller passes its own `--timeout`), and the
+    /// whole result, so a failure can be told from an answer.
+    static func runLong(_ args: [String]) -> Shell.Result {
+        guard let path else { return Shell.Result(status: -1, output: "", error: "rex not found") }
+        return Shell.capture(path, args)
+    }
+
     static func json(_ args: [String]) -> [String: Any]? {
         guard let data = run(args) else { return nil }
         return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]

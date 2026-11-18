@@ -16,7 +16,7 @@ Rex's Tail is a separate, independent app, not made by Superlogical. It doesn't 
   - context size and output tokens; hover for the full token breakdown
 
   Click a card to jump to that pane.
-- **Hosts.** The Rex version on this Mac and on each Rex host: what's running, what's installed, and whether a newer release is out. Where a host allows it, **Upgrade** installs the newer `rex` package and **Restart** restarts its Rex server. Both always ask first and list exactly what they'll do (see How it works).
+- **Hosts.** The Rex version on this Mac and on each Rex host: what's running, what's installed, and whether a newer release is out. Where a host allows it, **Upgrade** installs the newer `rex` package and **Restart** restarts its Rex server. Both always ask first and list exactly what they'll do (see How it works). The question goes to Rex's command palette, so it reaches every Rex app you have open, on the Mac, an iPad or a phone, and the first answer wins. When no Rex app can show it yet, Rex's Tail asks with a dialog on the Mac instead.
 
 ## How it works
 
@@ -25,6 +25,8 @@ Rex's Tail is a separate, independent app, not made by Superlogical. It doesn't 
 - **Remote agents.** Status comes from `rex -S <host>`. For token usage, Rex's Tail keeps one SSH connection per host and runs `Resources/agent_reader.py` there. The script only reads the agent logs and returns summary numbers. It's sent over the connection each time, so nothing is installed on the remote machine. The SSH alias must be the Rex host label in lowercase, and key-based login must work without a prompt (`BatchMode=yes`).
 
 - **Hosts.** This Mac's versions come from the Rex app on disk, and the newest release from the app's own update feed. A remote host is checked over SSH, the same way as remote agents: the installed `rex` package, its apt channel, and whether it runs as `rex-user.service`. The newest Linux release comes from Superlogical's apt repository (`pkgs.superlogical.com`). **Upgrade** appears only on hosts where `sudo` works without a password. It runs `sudo apt-get install --only-upgrade rex`, saves your sessions first with `rexurrect` if it's installed, then restarts `rex-user.service`. **Restart** does the last step alone. While the server is down for the restart, a `rex` command or another app can autostart a server of its own without Tailscale, which takes the socket and keeps the service (and the host's tailnet name) from coming back. So the restart stops any such server before it starts the service, and checks that the service came up. If a host has dropped off the tailnet for that reason, the widget says so and offers **Restart** to fix it. Nothing runs until you confirm.
+
+- **Asking in Rex.** Upgrade and Restart ask with [`rex.ui.pick`](https://www.superlogical.com/rex/docs/customize/custom-ui), run through `rex do -e` (`RexPrompt.swift`). Nothing is added to your `init.lua`. The prompt lists the action first (Return takes it), then each step, then Cancel. Rex answers `unsupported` when no connected app can show prompts, and then the Mac dialog asks instead.
 
 ## Build
 
