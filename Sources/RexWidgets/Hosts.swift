@@ -13,6 +13,8 @@ struct HostVersionInfo: Identifiable, Equatable {
         case unreachable
         case working(String)
         case failed(String)
+
+        var isMacUpdate: Bool { if case .macUpdateAvailable = self { return true } else { return false } }
     }
 
     var id: String { label ?? "local" }
@@ -199,11 +201,17 @@ final class HostsModel: ObservableObject {
             }
         }
 
+        row.canUpgrade = Self.macClientID() != nil   // Rex's update actions need the app connected
+        row.canRestart = row.canUpgrade
         if let latest = latestMacBuild {
             row.latest = latest
-            row.status = Versions.compare(build, latest) == .orderedAscending ? .macUpdateAvailable(latest) : .upToDate
+            if Versions.compare(build, latest) == .orderedAscending {
+                row.status = .macUpdateAvailable(latest)
+            } else {
+                row.status = row.serverPending ? .restartNeeded : .upToDate
+            }
         } else {
-            row.status = .unknown("Couldn't check for updates")
+            row.status = row.serverPending ? .restartNeeded : .unknown("Couldn't check for updates")
         }
         return row
     }
@@ -383,7 +391,7 @@ final class HostsModel: ObservableObject {
     /// you have open (Mac, iPad, phone) and the first answer wins. When no Rex
     /// app can show it, it's asked here with a dialog instead.
     func confirmAndUpgrade(_ host: HostVersionInfo) {
-        guard let label = host.label else { return }
+        guard let label = host.label else { return confirmMac(host) }
         let p = plan(host, label: label)
         // Its own thread: the answer can take minutes, and the hosts queue
         // keeps refreshing the widget meanwhile.
@@ -404,8 +412,7 @@ final class HostsModel: ObservableObject {
     private static func askInRex(_ p: Plan, label: String) -> RexPrompt.Answer {
         var items = [RexPrompt.Item(id: "go", title: "\(p.action) Rex on \(label)", subtitle: p.versions, icon: "server")]
         for (i, step) in p.steps.enumerated() {
-            items.append(.init(id: "step\(i)", title: step, subtitle: i == 0 ? "Over SSH to \(label.lowercased()), this will:" : nil,
-                               icon: "gear", detail: "\(i + 1)/\(p.steps.count)"))
+            items.append(.init(id: "step\(i)", title: step, icon: "gear", detail: "\(i + 1)/\(p.steps.count)"))
         }
         if let note = p.sessionsNote { items.append(.init(id: "sessions", title: note, icon: "terminal")) }
         items.append(.init(id: "cancel", title: "Cancel"))
@@ -489,6 +496,126 @@ final class HostsModel: ObservableObject {
                 }
             }
             self?.finish(host.id, .failed("\(label) didn't come back on the new version"))
+        }
+    }
+
+    // MARK: This Mac
+
+    /// The Rex app on this Mac, as Rex lists it, so its update and server
+    /// actions can be sent to it with `rex -C`.
+    static func macClientID() -> String? {
+        guard let list = RexCLI.json(["client", "ls", "--json"])?["clients"] as? [[String: Any]] else { return nil }
+        return list.first { c in
+            let info = c["info"] as? [String: Any]
+            return info?["kind"] as? String == "app" && info?["platform"] as? String == "macos"
+                && c["connection_state"] as? String == "connected"
+        }?["client_id"] as? String
+    }
+
+    /// The app's build, read back from Rex's client list once it reconnects.
+    private static func macClientBuild() -> String? {
+        guard let id = macClientID(),
+              let list = RexCLI.json(["client", "ls", "--json"])?["clients"] as? [[String: Any]],
+              let version = (list.first { $0["client_id"] as? String == id }?["info"] as? [String: Any])?["version"] as? String,
+              let open = version.firstIndex(of: "("), let close = version.firstIndex(of: ")") else { return nil }
+        return String(version[version.index(after: open)..<close])
+    }
+
+    private enum MacStep: String { case both = "go_both", app = "go_app", server = "go_server" }
+
+    /// On the Mac, Rex updates itself, and its server is a separate program
+    /// that only picks up a new version when it restarts. So this offers
+    /// either or both, through the app's own actions rather than SSH.
+    private func confirmMac(_ host: HostVersionInfo) {
+        var appTarget: String?
+        if case .macUpdateAvailable(let b) = host.status { appTarget = b }
+        let app = host.appVersion ?? "?"
+        var items: [RexPrompt.Item] = []
+        if let b = appTarget {
+            items.append(.init(id: MacStep.both.rawValue, title: "Update the app, then restart the server",
+                               subtitle: "App \(app) → build \(b), then the server picks up its new version", icon: "package"))
+            items.append(.init(id: MacStep.app.rawValue, title: "Update the app only",
+                               subtitle: "Rex relaunches; your terminals keep running", icon: "package"))
+        }
+        items.append(.init(id: MacStep.server.rawValue,
+                           title: host.serverPending ? "Restart the server onto its new version" : "Restart the server",
+                           subtitle: host.serverPending ? "A newer server is installed and waiting" : "Stops and starts the Rex server on this Mac",
+                           icon: "server"))
+        items.append(.init(id: "note", title: "Restarting the server closes every terminal on this Mac, agents included; rexurrect restores the sessions",
+                           icon: "terminal"))
+        items.append(.init(id: "cancel", title: "Cancel"))
+        let title = appTarget != nil ? "Update Rex on this Mac?" : "Restart Rex's server on this Mac?"
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            var answer: RexPrompt.Answer = .cancelled
+            for _ in 0..<5 {
+                answer = RexPrompt.pick(title: title, placeholder: "Choose, or Cancel", items: items)
+                if case .picked(let id) = answer, MacStep(rawValue: id) == nil, id != "cancel" { continue }
+                break
+            }
+            switch answer {
+            case .picked(let id):
+                if let step = MacStep(rawValue: id) { DispatchQueue.main.async { self?.runMac(host, step, appTarget: appTarget) } }
+            case .cancelled:
+                return
+            case .unavailable:
+                DispatchQueue.main.async { self?.askMacHere(host, appTarget: appTarget) }
+            }
+        }
+    }
+
+    private func askMacHere(_ host: HostVersionInfo, appTarget: String?) {
+        let alert = NSAlert()
+        var choices: [MacStep] = []
+        if let b = appTarget {
+            alert.messageText = "Update Rex on this Mac?"
+            alert.informativeText = "App \(host.appVersion ?? "?") → build \(b). Rex relaunches and your terminals keep running.\n\nRestarting the server as well closes every terminal on this Mac, agents included; rexurrect restores the sessions."
+            alert.addButton(withTitle: "Update and Restart Server"); choices.append(.both)
+            alert.addButton(withTitle: "Update App Only"); choices.append(.app)
+        } else {
+            alert.messageText = "Restart Rex's server on this Mac?"
+            alert.informativeText = "This closes every terminal on this Mac, agents included; rexurrect restores the sessions."
+            alert.addButton(withTitle: "Restart Server"); choices.append(.server)
+        }
+        alert.addButton(withTitle: "Cancel")
+        alert.alertStyle = .warning
+        NSApp.activate(ignoringOtherApps: true)
+        let i = alert.runModal().rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
+        guard i >= 0, i < choices.count else { return }
+        runMac(host, choices[i], appTarget: appTarget)
+    }
+
+    private func runMac(_ host: HostVersionInfo, _ step: MacStep, appTarget: String?) {
+        setStatus(host.id, .working(step == .server ? "Restarting server…" : "Updating…"))
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            if step != .server {
+                guard let id = Self.macClientID() else { self?.finish(host.id, .failed("The Rex app isn't connected")); return }
+                _ = RexCLI.run(["-C", id, "do", "client.update.check"])
+                // Relaunches the app, so the call may end without an answer.
+                _ = RexCLI.runLong(["--timeout", "300s", "-C", id, "do", "client.update.install"])
+                self?.setStatus(host.id, .working("Waiting for Rex…"))
+                var back = false
+                for _ in 0..<150 {   // up to 5 minutes to download, install and relaunch
+                    Thread.sleep(forTimeInterval: 2)
+                    if let b = Self.macClientBuild(), appTarget == nil || Versions.compare(b, appTarget!) != .orderedAscending {
+                        back = true; break
+                    }
+                }
+                guard back else { self?.finish(host.id, .failed("Rex didn't come back on build \(appTarget ?? "new")")); return }
+                if step == .app { self?.finish(host.id, nil); return }
+                Thread.sleep(forTimeInterval: 3)   // let the relaunched app settle
+            }
+            guard let id = Self.macClientID() else { self?.finish(host.id, .failed("The Rex app isn't connected")); return }
+            self?.setStatus(host.id, .working("Restarting server…"))
+            _ = RexCLI.runLong(["--timeout", "60s", "-C", id, "do", "client.server.restart"])
+            for _ in 0..<45 {
+                Thread.sleep(forTimeInterval: 2)
+                // --autostart=false: a poll must not start a server of its own.
+                if RexCLI.json(["--autostart=false", "api", "call", "server.version"]) != nil, Self.macClientID() != nil {
+                    self?.finish(host.id, nil); return
+                }
+            }
+            self?.finish(host.id, .failed("The server didn't come back"))
         }
     }
 
@@ -626,6 +753,11 @@ struct HostRow: View {
         }
         .padding(.vertical, 4)
         .help(tooltip)
+        .contextMenu {
+            if host.label == nil, host.canRestart {
+                Button(host.status.isMacUpdate ? "Update or Restart…" : "Restart Server…", action: onAction)
+            }
+        }
     }
 
     private var subtitle: String {
@@ -656,11 +788,10 @@ struct HostRow: View {
                 if let behind = behindText { Text(behind).font(.system(size: 9.5)).foregroundStyle(.orange) }
             }
         case .macUpdateAvailable(let build):
-            VStack(alignment: .trailing, spacing: 1) {
-                Text("Update").font(.system(size: 10, weight: .semibold))
-                Text("build \(build)").font(.system(size: 9.5))
+            VStack(alignment: .trailing, spacing: 2) {
+                actionButton("Update", enabled: host.canUpgrade)
+                Text("build \(build)").font(.system(size: 9.5)).foregroundStyle(.orange)
             }
-            .foregroundStyle(.orange)
         case .unknown(let why):
             Image(systemName: "questionmark.circle").foregroundStyle(.secondary).help(why)
         case .unreachable where host.strayServer:
